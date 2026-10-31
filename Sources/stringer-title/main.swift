@@ -47,8 +47,10 @@ Reply with the title only.
 let session = LanguageModelSession(instructions: instructions)
 let prompt = "Transcript excerpt:\n\n\(input)\n\nTitle:"
 do {
+    // Greedy, so titles are deterministic. `sampling:` is the label the
+    // macOS 26 SDK has (27 renames it `samplingMode:` and deprecates this).
     let response = try await session.respond(
-        to: prompt, options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 32))
+        to: prompt, options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 32))
     var title = response.content.split(separator: "\n").first.map(String.init) ?? ""
     title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         .trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”‘’*#:."))
