@@ -1,0 +1,11 @@
+.build/
+.venv-build/
+bin/
+dist/
+aec/build/
+aec/out/
+aec/webrtc-audio-processing-*/
+aec/*.log
+*.tar.xz
+.DS_Store
+notes/

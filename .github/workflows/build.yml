@@ -1,0 +1,90 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcode-select -p
+          swift --version
+
+      - name: Version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(sed -n 's/^public let stringerVersion = "\(.*\)"/\1/p' Sources/StringerCore/Files.swift)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but stringerVersion is $version"; exit 1; }
+
+      - name: Cache the echo canceller
+        uses: actions/cache@v4
+        with:
+          path: aec/out
+          key: aec-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('aec/build.sh') }}
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-${{ runner.arch }}-
+
+      # The same self-signed identity as local builds, so macOS keeps
+      # microphone and system-audio grants across releases. Without the
+      # secrets (forks, pull requests) builds are signed ad-hoc.
+      - name: Signing identity
+        env:
+          SIGNING_P12: ${{ secrets.SIGNING_P12 }}
+          STRINGER_P12_PASSWORD: ${{ secrets.SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -n "$SIGNING_P12" ]; then
+            echo "$SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/id.p12"
+            ./setup-signing.sh --import-p12 "$RUNNER_TEMP/id.p12"
+            rm -f "$RUNNER_TEMP/id.p12"
+          else
+            echo "no signing secret: building ad-hoc"
+          fi
+
+      - name: Build and package
+        run: ./package.sh
+
+      - name: Unit tests
+        run: scripts/test.sh --unit
+
+      - name: Check signature
+        run: codesign -d -r- bin/Stringer.app 2>&1 | tail -1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stringer-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Stringer-dmg
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" *.dmg --repo "$GITHUB_REPOSITORY" --title "Stringer ${GITHUB_REF_NAME#v}" --generate-notes
